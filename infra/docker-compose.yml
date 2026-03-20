@@ -1,0 +1,131 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-lgpd-escola
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-escola_iam}
+      POSTGRES_USER: ${POSTGRES_USER:-escola_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-troque-esta-senha}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ../evidencias/logs/postgres:/var/log/postgresql
+      - ../evidencias/auditoria:/evidencias/auditoria
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-escola_admin} -d ${POSTGRES_DB:-escola_iam}"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis-authentik
+    restart: always
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2025.8.3
+    container_name: authentik-server
+    restart: always
+    command: server
+    networks:
+      default:
+        aliases:
+          - poc_iam
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-escola_admin}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-escola_iam}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD:-troque-esta-senha}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-defina-uma-chave-segura}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+      - ../evidencias/logs/authentik:/var/log/authentik
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2025.8.3
+    container_name: authentik-worker
+    restart: always
+    command: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-escola_admin}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-escola_iam}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD:-troque-esta-senha}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-defina-uma-chave-segura}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik_media:/media
+      - authentik_templates:/templates
+      - ../evidencias/logs/authentik:/var/log/authentik
+
+  app-escola:
+    image: python:3.12-slim
+    container_name: app-escola
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /app
+    command: >-
+      sh -c "pip install --no-cache-dir -r requirements.txt &&
+      flask --app app.py run --host=0.0.0.0 --port=8000"
+    environment:
+      FLASK_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-escola_admin}:${POSTGRES_PASSWORD:-troque-esta-senha}@postgres:5432/${POSTGRES_DB:-escola_iam}
+      APP_LOG_PATH: /evidencias/logs/app-escola/access.log
+      SCHOOL_NAME: Escola Municipal PoC LGPD
+    volumes:
+      - ../app-escola:/app
+      - ../evidencias/logs/app-escola:/evidencias/logs/app-escola
+      - ../evidencias/auditoria:/evidencias/auditoria
+    ports:
+      - "8000:8000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy-borda
+    restart: always
+    depends_on:
+      - app-escola
+      - authentik-server
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../evidencias/logs/caddy:/var/log/caddy
+      - caddy_data:/data
+      - caddy_config:/config
+      - ../infra/Caddyfile:/etc/caddy/Caddyfile:ro
+
+volumes:
+  postgres_data:
+  redis_data:
+  authentik_media:
+  authentik_templates:
+  caddy_data:
+  caddy_config:
