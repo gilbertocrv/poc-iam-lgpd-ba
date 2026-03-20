@@ -1,0 +1,33 @@
+{
+    email equipe-ti@municipio.ba.gov.br
+}
+
+app.localhost {
+    encode zstd gzip
+    reverse_proxy app-escola:8000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+    log {
+        output file /var/log/caddy/app-access.log
+        format json
+    }
+}
+
+auth.localhost {
+    encode zstd gzip
+    reverse_proxy authentik-server:9000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "same-origin"
+    }
+    log {
+        output file /var/log/caddy/auth-access.log
+        format json
+    }
+}
